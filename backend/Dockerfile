@@ -5,13 +5,13 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-COPY backend/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY backend/app ./app
-COPY backend/scripts ./scripts
-COPY backend/migrations ./migrations
-COPY backend/run.py .
+COPY app ./app
+COPY scripts ./scripts
+COPY migrations ./migrations
+COPY run.py .
 
 RUN mkdir -p uploads
 

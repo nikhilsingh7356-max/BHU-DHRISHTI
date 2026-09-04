@@ -1,0 +1,47 @@
+services:
+  # ---------- Managed PostgreSQL database ----------
+  - type: postgres
+    name: bhudrishti-db
+    plan: free
+    database: bhudrishti
+    user: bhudrishti
+    ipAllowList: []
+
+  # ---------- FastAPI backend ----------
+  - type: web
+    name: bhudrishti-api
+    runtime: docker
+    plan: free
+    rootDir: backend
+    dockerContext: .
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bhudrishti-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: APP_ENV
+        value: production
+      - key: CORS_ORIGINS
+        value: '["https://bhudrishti-frontend.onrender.com","http://localhost:3000"]'
+      - key: PYTHONWARNINGS
+        value: ignore
+    disk:
+      name: uploads
+      mountPath: /app/uploads
+      sizeGB: 1
+
+  # ---------- Next.js frontend ----------
+  - type: web
+    name: bhudrishti-frontend
+    runtime: docker
+    plan: free
+    rootDir: frontend
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://bhudrishti-api.onrender.com

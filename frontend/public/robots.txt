@@ -1,0 +1,13 @@
+# BHU-DRISHTI - National Land Acquisition Control Tower
+#
+# This is an internal departmental application, not a public website. It
+# handles land acquisition records and must not appear in search results.
+#
+# This file is intentionally restrictive rather than permissive: a deployment
+# that should be indexed removes these lines and points them at real sitemap
+# URLs. Leaving it out entirely is worse than denying access, because a missing
+# /robots.txt on a static host falls through to the SPA index.html, which is
+# served with a text/html content type and is not a valid robots.txt.
+
+User-agent: *
+Disallow: /

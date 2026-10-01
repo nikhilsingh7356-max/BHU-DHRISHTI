@@ -1,0 +1,27 @@
+# BHU-DRISHTI
+
+> BHU-DRISHTI is the internal Land Acquisition Intelligence and Decision
+> Control Tower used by the Department of Land Resources (DoLR), Ministry of
+> Rural Development, Government of India, to monitor statutory land acquisition
+> workflow under the Right to Fair Compensation and Transparency in Land
+> Acquisition Act, 2013 (RFCTLARR Act, 2013).
+>
+> This is a restricted departmental system. It is not a public service and the
+> pages below require authenticated access.
+
+## Notes
+
+- **Access:** staff authentication required; requests are not publicly crawlable.
+- **Statutory basis:** RFCTLARR Act, 2013.
+- **Data:** demonstration data is bundled with the application; live parcel
+  records are served by the backend API and never exposed to crawlers.
+
+## Application
+
+- [Login](/): officer sign-in for departmental and field staff.
+- [Control tower](/): statutory workflow status, bottleneck alerts and the GIS
+  parcel map for active acquisition projects.
+
+## Optional
+
+- [Health check](/health): backend liveness endpoint.

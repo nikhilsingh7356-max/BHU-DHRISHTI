@@ -17,9 +17,17 @@
   - [Installation](#installation)
   - [Running the App](#running-the-app)
 - [Project Structure](#project-structure)
+  - [Request path](#request-path)
+- [Deployment](#deployment)
+  - [Frontend  Vercel](#frontend--vercel)
+  - [Checking which data you are seeing](#checking-which-data-you-are-seeing)
+  - [Backend  Vercel (optional)](#backend--vercel-optional)
 - [Development](#development)
+  - [Available Scripts](#available-scripts)
   - [Performance measurement](#performance-measurement)
 - [API Overview](#api-overview)
+  - [Contracted endpoints - actual status](#contracted-endpoints---actual-status)
+  - [Verifying the backend](#verifying-the-backend)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -30,7 +38,7 @@
 BHU-DRISHTI is a full-stack application that combines geographic information system (GIS) capabilities with the statutory workflow engine for land acquisition under the RFCTLARR Act. It enables government officers to:
 
 - 🗺️ Visualize and track land parcels on interactive PostGIS-backed maps
-- ⚙️ Manage the 8-stage RFCTLARR statutory workflow (Sec 11 → Sec 15 → Sec 19 → Sec 23 → Sec 38)
+- ⚙️ Manage the RFCTLARR statutory workflow (SIA study → Sec 11 → Sec 15 → Sec 19 → Sec 23 → Sec 38 → completion — seven stages)
 - ⏱️ Monitor SLA deadlines and identify bottlenecks in real time
 - 🔒 Verify officer identities and enforce role-based jurisdiction access
 - 📄 Maintain a tamper-proof audit trail of all actions
@@ -54,40 +62,63 @@ BHU-DRISHTI is a full-stack application that combines geographic information sys
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                      Frontend                             │
-│              React + Vite + Tailwind (Port 5173)          │
-│                                                           │
-│  ┌────────────┐ ┌──────────────┐ ┌────────────────────┐  │
-│  │  TopBar &  │ │  GIS Parcel  │ │  Workflow Tracker  │  │
-│  │  LevelNav  │ │     Map      │ │  (8-Stage RFCT)    │  │
-│  └─────┬──────┘ └──────┬───────┘ └─────────┬──────────┘  │
-│        └───────────────┼───────────────────┘             │
-│                        │                                  │
-│                 ┌──────▼──────┐                           │
-│                 │   Services  │                           │
-│                 │   (API)     │                           │
-│                 └──────┬──────┘                           │
-└────────────────────────┼──────────────────────────────────┘
-                         │  HTTP / REST
-┌────────────────────────▼──────────────────────────────────┐
-│                      Backend                               │
-│               Python / FastAPI (Port 8000)                 │
-│                                                            │
-│  ┌────────────┐ ┌────────────────┐ ┌──────────────────┐   │
-│  │   Core     │ │    Routers     │ │    Services      │   │
-│  │  (Config)  │ │ (Auth/Workflow)│ │ (Business Logic) │   │
-│  └─────┬──────┘ └───────┬────────┘ └────────┬─────────┘   │
-│        └────────────────┼───────────────────┘             │
-│                  ┌──────▼──────┐                           │
-│                  │  Supabase   │                           │
-│                  │ (PostgreSQL │                           │
-│                  │  + PostGIS) │                           │
-│                  └─────────────┘                           │
-└───────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│  Frontend — React 19 + Vite + Tailwind                         │
+│  TopBar · LevelNav · LoginModal · WorkflowTracker              │
+│  WorkflowEngine · BottleneckAlerts · ParcelMapSection           │
+│                        │                                      │
+│                 ParcelMap (Leaflet, lazy chunk)                 │
+└────────────────────────┬──────────────────────────────────────┘
+                         │  HTTP/REST · Bearer JWT
+                         ▼
+┌───────────────────────────────────────────────────────────────┐
+│  Backend — FastAPI / Uvicorn (port 8000)                        │
+│                                                               │
+│  CORS allowlist · security.py (JWT verify, RBAC)                │
+│                                                               │
+│   routes/auth.py      verify-officer · login                    │
+│   routes/parcels.py   GET  geojson        [auth required]       │
+│   routes/workflow.py  POST transition     [CENTRAL | STATE]     │
+└────────────────────────┬──────────────────────────────────────┘
+                         │  Supabase REST / PostgREST RPC
+                         │  ⚠ service_role key BYPASSES RLS
+                         ▼
+┌───────────────────────────────────────────────────────────────┐
+│  Database — Supabase (PostgreSQL + PostGIS)                     │
+│  department_officer_registry · profiles                         │
+│  projects · land_parcels (geometry Polygon 4326)                │
+│  audit_logs            — RLS enabled on all five               │
+└───────────────────────────────────────────────────────────────┘
 ```
 
-**Flow:** Frontend → REST API → Backend Routers → Services → Supabase (PostgreSQL + PostGIS)
+**Flow:** React SPA → FastAPI routers → Supabase / PostGIS.
+
+### Why the API re-implements authorisation
+
+The backend talks to PostgREST with Supabase's `service_role` key, and
+`service_role` **bypasses Row Level Security**. RLS alone therefore offers no
+protection for an endpoint reached through this API. Each protected route
+re-applies its own predicate:
+
+| Route | Predicate enforced in code |
+|---|---|
+| `GET /api/v1/parcels/geojson` | `role = 'CENTRAL'` OR `created_by = caller` |
+| `POST /api/v1/workflow/transition` | role must be `CENTRAL` or `STATE` (mirrors `projects_modify`) |
+
+These predicates are load-bearing. Removing them would expose every land record
+to any authenticated officer.
+
+### Statutory stages
+
+`public.project_stage` defines **seven** stages:
+
+`SIA_STUDY → SEC_11_NOTIF → SEC_15_OBJECTION → SEC_19_DECLARATION → SEC_23_AWARD → SEC_38_POSSESSION → COMPLETED`
+
+The transition endpoint enforces strictly-forward, one-step-at-a-time movement
+using this declaration order as the source of truth. (Note: `docs/api-contracts.md`
+illustrates a stage as *"Stage 4 of 8"*, which does not match the seven-value
+enum — the enum wins.)
+
 
 ---
 
@@ -111,7 +142,7 @@ BHU-DRISHTI is a full-stack application that combines geographic information sys
 Ensure you have the following installed:
 
 - **Python** 3.11 or higher
-- **Node.js** 18+ and npm/yarn/pnpm
+- **Node.js** 20 or higher (matches `engines.node` in `frontend/package.json`) and npm/yarn/pnpm
 - **Supabase** account — create project at [supabase.com](https://supabase.com) and enable PostGIS
 - **Git** — for version control
 
@@ -215,34 +246,63 @@ The app will be available at:
 
 ```
 bhu-drishti/
-├── backend/                    # Python/FastAPI backend
-│   └── app/
-│       ├── core/               # Configuration, settings, dependencies
-│       ├── routers/            # API route handlers (endpoints)
-│       └── services/           # Business logic & data access
+├── backend/                        # Python / FastAPI
+│   ├── main.py                     # app, router registration, CORS, /health
+│   ├── database.py                 # lazy Supabase client (fails closed if unconfigured)
+│   ├── security.py                 # JWT issue/verify, require_auth, require_roles
+│   ├── routes/
+│   │   ├── auth.py                 # POST /auth/verify-officer, POST /auth/login
+│   │   ├── parcels.py              # GET  /parcels/geojson   (auth required)
+│   │   └── workflow.py             # POST /workflow/transition (CENTRAL|STATE)
+│   ├── verify_auth.py              # JWT guard harness   -> 6/6
+│   ├── verify_workflow.py          # workflow guards     -> 8/8
+│   ├── requirements.txt
+│   └── .env.example
 │
-├── frontend/                   # JavaScript/TypeScript frontend
-│   ├── public/                 # Static assets
+├── frontend/                       # JavaScript / JSX (no TypeScript)
+│   ├── public/
+│   │   ├── robots.txt              # restrictive crawler policy
+│   │   └── llms.txt
 │   └── src/
-│       ├── assets/             # Images, fonts, icons
-│       ├── components/         # Reusable UI components
-│       │   ├── common/         # Generic components (buttons, modals, etc.)
-│       │   ├── gis/            # Map viewers, spatial tools, layers
-│       │   ├── layout/         # Page layout, navigation, header/footer
-│       │   └── workflow/       # Workflow builder, step editors, triggers
-│       ├── services/           # API client & data fetching
-│       └── views/              # Page-level components / routes
+│       ├── App.jsx                 # app shell, session, jurisdiction scoping
+│       ├── main.jsx
+│       ├── index.css               # z-index scale, Leaflet sizing
+│       ├── lib/api.js              # API client, strict auth, mock fallback
+│       ├── data/                   # mockData.js, parcelData.js, workflowData.js
+│       └── components/
+│           ├── alerts/BottleneckAlerts.jsx
+│           ├── auth/LoginModal.jsx
+│           ├── common/DataSourceBadge.jsx, ParcelSummary.jsx
+│           ├── layout/TopBar.jsx
+│           ├── map/ParcelMap.jsx, ParcelMapSection.jsx
+│           ├── navigation/LevelNav.jsx
+│           └── workflow/WorkflowEngine.jsx, WorkflowTracker.jsx
 │
-├── database/                   # Schema definitions, migrations, seeds
-├── docs/                       # Project documentation
-│   ├── sprints/                # Sprint planning & daily notes
-│   ├── database-schme.md       # DB schema reference
-│   ├── api-contracts.md        # API endpoint contracts
-│   └── ui-guidelines.md        # UI/UX design standards
+├── database/
+│   ├── 01scheme.sql                # schemas, enums, tables, RLS
+│   ├── 02mockdata.sql              # seed officers, projects, parcels
+│   └── 03parcels_geojson.sql       # GeoJSON RPC — REQUIRED, run last
 │
-├── .github/                    # GitHub config (PR template, CI, etc.)
-├── CONTRIBUTING.md             # Contribution guidelines
-└── README.md                   # This file
+└── docs/
+    ├── sprints/day-1.md            # Sprint planning
+    ├── database-schme.md           # DB schema reference
+    ├── api-contracts.md            # API endpoint contracts (5 endpoints)
+    ├── architecture.md
+    ├── ci-cd-guide.md
+    ├── DOCUMENTATION_SETUP_GUIDE.md
+    └── ui-guidelines.md            # UI/UX design standards
+```
+
+### Request path
+
+```
+React SPA  ──Bearer JWT──▶  FastAPI  ──service_role──▶  Supabase / PostGIS
+```
+
+The API holds Supabase's `service_role` key, which **bypasses Row Level Security**.
+RLS alone therefore provides no protection: every protected route re-applies its
+predicate in application code. Removing those predicates would expose all land
+records, so they are load-bearing, not decorative.
 ```
 
 ---
@@ -296,9 +356,19 @@ Set these environment variables on that project:
 
 | Variable | Purpose |
 |----------|---------|
+| `JWT_SECRET` | **Required.** Signing key for issued access tokens. No default exists — if unset, login is refused and protected routes return 503 |
 | `SUPABASE_URL` | Supabase project URL |
-| `SUPABASE_KEY` | Supabase key (server-side only) |
+| `SUPABASE_KEY` | Supabase **service role** key (server-side only) |
+| `ACCESS_TOKEN_TTL_MINUTES` | Optional. Access-token lifetime, default `60` |
 | `CORS_ORIGINS` | Comma-separated list of allowed browser origins, including your frontend URL |
+
+Generate a signing key with:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Set it through your host's environment-variable settings. Do not commit it.
 
 Use a real allow-list for `CORS_ORIGINS`. A wildcard origin cannot be combined
 with credentialed requests — browsers reject that combination, so a wildcard
@@ -340,7 +410,17 @@ npm run preview
 npm run lint
 ```
 
-> No test suite is wired up yet, so `pytest` and `npm test` are not available.
+**Backend verification harnesses** (run against a live `uvicorn` on port 8000):
+```bash
+cd backend
+python verify_auth.py       # JWT gate          -> 6/6
+python verify_workflow.py   # workflow guards   -> 8/8
+```
+
+> There is no `npm test` script or `pytest` suite — the project ships no test
+> framework. The two scripts above are the automated coverage that exists. They
+> use an obviously non-production signing secret and mint their own tokens;
+> neither reads real credentials.
 
 ### Performance measurement
 
